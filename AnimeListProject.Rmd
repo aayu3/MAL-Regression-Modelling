@@ -1,0 +1,355 @@
+---
+title: "My Anime List Analysis"
+author: "Aaron Yu"
+date: "2025-04-14"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+---
+
+#  Loading Necessary Libraries
+```{r libraryload}
+library(ggplot2)
+library(MASS)
+library(faraway)
+library(tidyverse)
+library(GGally)
+library(dplyr)
+```
+
+#  Loading in Data and Basic Structure
+```{r}
+animelist = read.csv("AnimeList.csv")
+animelist = animelist %>% 
+  select(-title_japanese) # For rendering purposes
+head(animelist)
+```
+
+```{r}
+dim(animelist)
+```
+
+#  Data Cleaning
+Here we clean the data by converting the genre list into columns with booleans for each genre. We can also see there are 5 shows that have not yet aired with a score of 0.0 we will drop these to prevent them from skewing our data.
+```{r}
+animelist_with_genres = animelist %>%
+  filter(!(status == "Not yet aired")) %>%
+  mutate(genre_list = str_split(genre, ", ")) %>%
+  unnest(genre_list) %>%
+  filter(!is.na(genre_list), genre_list != "") %>%
+  mutate(has_genre = 1) %>%
+  pivot_wider(
+    names_from = genre_list,
+    values_from = has_genre,
+    values_fill = 0
+  )
+```
+
+
+In order to make the genre data more manageable and meaningful we will analyze the which genres are the most popular and decide a cutoff based on that
+
+```{r}
+genre_columns = names(animelist_with_genres)[!(names(animelist_with_genres) %in% names(animelist))]
+genre_counts = sapply(animelist_with_genres[genre_columns], sum)
+genre_counts = sort(genre_counts, decreasing = TRUE)
+print(genre_counts)
+```
+
+Based on the data I have decided to keep the all the genres, another thing is we want to get rid of shows that aren't scored by a large enough number of people.
+
+#  Histogram of the Score
+```{r}
+ggplot(animelist_with_genres, aes(x = score)) +
+  geom_histogram(binwidth = 0.25, fill = "#69b3a2", color = "#e9ecef", alpha = 0.9) +
+  labs(title = "Distribution of Anime Scores",
+       x = "Score (0-10)",
+       y = "Frequency") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 10, by = 1)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16))
+```
+Based on this graph we have a lot of outliers at 0 so we will implement a threshold for anime we will considered if not enough users have viewed it before.
+
+
+```{r}
+ggplot(animelist_with_genres, aes(x = scored_by)) +
+  geom_histogram(bins = 100, fill = "#69b3a2", color = "#e9ecef", alpha = 0.9) +
+  scale_x_log10(
+    breaks = scales::trans_breaks("log10", function(x) 10^x),
+    labels = scales::label_comma()
+  ) +
+  labs(
+    title = "Distribution of Number of People Who Scored Each Anime",
+    subtitle = "Log Scale (more detailed)",
+    x = "Number of People Who Scored (Log Scale)",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10)
+  ) +
+  #  Add vertical reference lines for potential thresholds
+  geom_vline(xintercept = c(10, 50, 100, 500, 1000), 
+             linetype = "dashed", 
+             color = "darkred",
+             alpha = 0.7) +
+  #  Add annotations for the reference lines
+  annotate("text", 
+           x = c(10, 50, 100, 500, 1000), 
+           y = rep(0, 5), 
+           label = c("10", "50", "100", "500", "1000"),
+           vjust = -0.5,
+           color = "darkred")
+```
+We will start by getting rid of shows that have been scored less than 10 times and see if the number of 0 outliers change.
+
+```{r}
+min_ratings_threshold = 10
+animelist_with_genres = animelist_with_genres %>%
+  filter(scored_by >= min_ratings_threshold)
+
+ggplot(animelist_with_genres, aes(x = score)) +
+  geom_histogram(binwidth = 0.25, fill = "#69b3a2", color = "#e9ecef", alpha = 0.9) +
+  labs(title = "Distribution of Anime Scores",
+       x = "Score (0-10)",
+       y = "Frequency") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 10, by = 1)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16))
+```
+We can see this eliminates a lot of the 0 scores which makes our data much more reasonable.
+
+
+
+
+#  Summary Statistics
+```{r}
+summary(animelist_with_genres$score)
+sd(animelist_with_genres$score, na.rm = TRUE)
+
+```
+
+As we can see, most anime tend to score around 6.5, the exact median being 6.45 with a standard deviation of 1.058221.  We had a set of outliers at 0 which seemed to be due to being rated by a small number of users. The data seems to have a longer tail on the left with a steeper drop as the scores get higher, showing that users seem to be more reluctant to give higher scores.
+
+#  Predictor Variables
+For our quantitative predictors we will use the number of episodes, scored_by, as I suspect that shows with a large number of ratings will have a more homogenized overall score, evening out to be very average. For categorical variables we will use Type, Source, Rating, and Studio. We will use genre data in later analysis.
+
+```{r}
+ggplot(animelist_with_genres, aes(x = episodes, y = score)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red") +  #  Linear trend line
+  labs(
+    title = "Relationship Between Number of Episodes and Anime Score",
+    x = "Number of Episodes",
+    y = "Score (0-10)"
+  ) +
+  theme_minimal()
+```
+
+We can see that the number of episodes doesn't seem to have a very linear relationship, but as predicted, shows with larger numbers of episodes seem to have a very average score. That said there does still seem to be a concentration of higher scores given the higher number of episodes. This makes sense as only well-received shows would be expected to receive a longer runtime or else its likely the show would be canceled or pulled from air.
+
+```{r}
+ggplot(animelist_with_genres, aes(x = scored_by, y = score)) +
+  geom_point(alpha = 0.3) +
+  
+  geom_smooth(method = "lm", color = "red") +  #  Linear trend line
+  labs(
+    title = "Relationship Between Number of Ratings and Anime Score",
+    x = "Number of Ratings",
+    y = "Score (0-10)"
+  ) +
+  theme_minimal()
+
+```
+```{r}
+ggplot(animelist_with_genres, aes(x = scored_by, y = score)) +
+  geom_point(alpha = 0.3) +
+  scale_x_log10(labels = scales::comma) +  #  Log scale for x-axis
+  geom_smooth(method = "lm", color = "red") +  #  Linear trend line
+  labs(
+    title = "Relationship Between Number of Ratings and Anime Score",
+    x = "Number of Ratings",
+    y = "Score (0-10)"
+  ) +
+  theme_minimal()
+```
+
+The number of ratings has a much more linear relationship with the anime score, obviously capping out at a max score of 10. With a log scale for the number of rating, we see a much more linear relationship. This seems to suggest diminishing returns or an effect of crowd think, where users are influenced by an existing score that a show has.
+
+# Initial Model
+```{r}
+anime_model = lm(score ~ episodes + log(scored_by) + type + source + rating, 
+                  data = animelist_with_genres)
+summary(anime_model)
+```
+
+# Model Interpritation
+```{r}
+summary(anime_model)
+
+```
+```{r}
+anime_model$xlevels
+```
+## Model Baseline
+Our model baseline would be an anime that has type=Movie, source=4-koma manga, and a rating=G - All Ages, thus our intercept, 4.6728318, would be the expected score for an anime that has 0 episodes, was scored by 1 person (since log), is a Movie, was adapted from a 4-koma manga, and has a rating of G - for all ages.
+
+## Quantitative Predictor Interpretation
+We will interpret the coefficient for the episodes predictor, which is 0.0012006, this means when accounting for all other predictors and holding them constant, we expect the score of the anime to increase by 0.0012282 for each additional episode.
+
+## Categorical Predictor Interpretation
+For the type variable when holding all other variables constant, when the anime is a Movie, the score is accounted for in the intercept, when the anime is a Music video, this lowers the score by 0.5327810, when it is an ONA (Original Net Animation) it lowers the score by 0.4127626, when it is an OVA (Original Video Animation) it lowers the score by 0.0253645, when it is a Special it lowers the score by 0.0271771, and when it is a TV series it increases the score by 0.0401051 We have 5 levels not including our baseline level, so this contributes 5 parameters towards p.
+
+# Box-Cox Transformation
+
+
+```{r}
+boxcox(anime_model, lambda = seq(2, 2.5, by = 0.05))
+
+```
+Looking at this we can see the 95% confidence interval looks to range from around 2.15 to 2.29, given that for simplicities sake we can try a 2.2 power transformation and compare against our previous model.
+
+```{r}
+lambda = 2.2
+animelist_with_genres = animelist_with_genres |>
+  mutate(score_bc = (score^lambda - 1) / lambda)
+
+model_bc = lm(score_bc ~ episodes + log(scored_by) + type + source + rating,
+             data = animelist_with_genres)
+
+summary(model_bc)
+par(mfrow = c(2, 2))
+plot(model_bc)
+```
+
+## Comparison + Linearity Assumptions
+```{r}
+par(mfrow = c(2, 2))
+plot(anime_model)
+
+pred_orig = predict(anime_model)
+pred_bc   = (predict(model_bc) * lambda + 1)^(1 / lambda)
+
+rmse_orig = sqrt(mean((animelist_with_genres$score - pred_orig)^2))
+rmse_bc   = sqrt(mean((animelist_with_genres$score - pred_bc)^2))
+
+c(RMSE_untransformed = rmse_orig,
+  RMSE_BoxCox        = rmse_bc)
+```
+We can see that when comparing the residuals vs fitted graphs, our Power-Transformation model is better distributed horizontally, where as our original model was more weighted towards the loweer end of the scale. The same happens with the Q-Q residuals, with the power-transformation model fitting the diagonal line better than the old model. Although the difference in RMSE and $R^2$ is negligible, I think the difference in heteroscedasticity and tail departure from normality make the transformed model a valid choice for us to use.
+
+# Scatterplot Matrix
+
+```{r}
+numeric_data = animelist_with_genres %>%
+  select(episodes, scored_by) %>%
+  mutate(log_scored_by = log(scored_by)) %>%
+  select(-scored_by)
+
+
+pairs(numeric_data, 
+      main = "Scatterplot Matrix of Numeric Variables",
+      pch = 16,
+      col = "#3366FF80",
+      lower.panel = NULL) 
+
+par(mfrow = c(2, 2))
+boxplot(score ~ type, data = animelist_with_genres, main = "Score by Type")
+boxplot(score ~ source, data = animelist_with_genres, main = "Score by Source")
+boxplot(score ~ rating, data = animelist_with_genres, main = "Score by Rating")
+```
+As we can see we don't really have any sort of relationship between the number of episodes and the amount of people scored by, the distribution is pretty equal with some outliers where there were shows with more episodes but scored by fewer people.
+
+# Fitting a Second Model
+We plan to fit a second model including a new term for each of the top 5 most popular genres, to see if they have any influence on whether a show has a high score. The idea is that comedy shows may be more popular than another genre like action shows and we want to capture that data.
+
+```{r}
+genre_model = lm(score_bc ~ episodes + log(scored_by) + type + source + rating + Comedy + Action + Fantasy + Adventure + Drama,
+             data = animelist_with_genres)
+summary(genre_model)
+```
+##  Model Selection
+
+```{r}
+step_bc = stepAIC(
+  genre_model,
+  scope = list(
+    lower = model_bc,
+    upper = genre_model
+  ),
+  direction = "both",
+  trace = FALSE
+)
+summary(step_bc)
+```
+
+We do stepwise model selection using AIC as our metric, with our original model as the baseline and our genre model as the upper. We can see that we end selecting our genre model as the best model and that our new model has a higher Adjusted R-squared of 0.6047 compared to our previous model which had an Adjusted R-squared of 0.5928. We can further validate this with an ANOVA Test.
+
+## Anova Test
+```{r}
+anova(model_bc, genre_model)
+```
+Our null hypothesis $H_0$ is that the additional genre variables has no effect on the score of the anime and our Alternate hypothesis is that it does have an effect. Here we have an F-statistic, not a test statistic which is 80.518. We can see that our p-value is $2.2e-16$ which is far below 0.05, meaning we reject the null hypothesis, indicating that the genre variables provides statistically significant information beyond the existing predictors.
+
+# Model Analysis
+We settle upon the genre_model which includes the five most popular genres and whether a show has that genre as our best model. We can see from the previous ANOVA test and our model selection that adding these genres provide valuable information, even when penalizing for model complexity.
+
+## Fitted Model
+Since we have many levels for our categorical variables, we will write a specific model for a TV show that was adapted from a Novel with a PG-13 rating.
+Our model would be $\hat{y} \text{ (power-transformed score)} = 11.665811 + 0.237800\text{ (since TV show)} + 2.068773 \text{ (since adapted from Novel)} + 0.287937 \text{ (since PG-13)}  + 0.010413 *\text{number of episodes} + 2.343011*\text{log(number of people scored by)} + 0.418327 \text{(if comedy)} + 0.499463 \text{(if action)} + 0.513766 \text{(if fantasy)} + 1.279817 \text{(if adventure)} + 2.573537 \text{(if drama)}$
+Or:
+$\hat{y}\text{ (power-transformed score)} = 14.260321  + 0.010413 *\text{number of episodes} + 2.343011*\text{log(number of people scored by)} + 0.418327 \text{(if comedy)} + 0.499463 \text{(if action)} + 0.513766 \text{(if fantasy)} + 1.279817 \text{(if adventure)} + 2.573537 \text{(if drama)}$
+
+## Model Size
+For this model our we have n = 13153 and p = 34 . Since we want to have at least 5-10 observations per coefficient, model complexity is not a concern since we have $\frac{13153}{34} \approx 386.9$ observations per coefficient, which is well above the suggested 5-10 threshold.
+
+```{r}
+c(n = nobs(genre_model),
+  p = length(coef(genre_model)))
+```
+##  Standard Deviation/Variance Confirmation
+```{r}
+sd_y  = sd(animelist_with_genres$score_bc, na.rm = TRUE)
+sd_yest = summary(genre_model)$sigma
+c(sd_y, sd_yest)
+1 - (sd_yest/sd_y)^2
+```
+The standard deviation of y shows how much spread the scored_bc variable has and the standard deviation of the error shows how much spread the error has after our model showing that we have cut down on unexplained spread from 9.4 to 5.9, we expect these values to correspond to the adjusted $R^2$ of the model, which they do
+
+## Collinearity
+We covered this early but we will do this again with vif.
+```{r}
+num_only_model = lm(
+  score_bc ~ episodes + log(scored_by),
+  data = animelist_with_genres
+)
+vif(num_only_model)
+```
+Since both our VIF values are well below 5, multicollinearity is not a cause of concern for us.
+
+## Model Assumption
+We also covered this earlier but again
+```{r}
+par(mfrow = c(2, 2))
+plot(genre_model)
+```
+We can see that our residuals are evenly distributed, and the scale location plot is also nearly horizontal, indicating linearity and homoscedasticity. The normality of errors looks good from the Q-Q residuals as they hug the line except for  the tails, and we will investigate outliers/leverage points later but we don't have too  many issues. We do have points of high leverage, these correspond to popular shows that have many more people scoring them compared to regular shows. I think this is still important data, as if these shows achieve that mainstream appeal, there should be some indicators from the data.
+
+
+# Error Estimation
+
+```{r}
+res   = resid(genre_model)  
+h     = hatvalues(genre_model) 
+e_loo = res / (1 - h)
+
+rmse_loo = sqrt(mean(e_loo^2)) 
+rmse_loo
+score0  = 6
+rmse_raw = rmse_loo / (lambda * score0^(lambda - 1))
+rmse_raw
+```
+Our error is 5.905177 and after we convert it back from the transformation we get a roughly 0.313 error which is quite small. Unable to directly use caret package since I keep running into an issue with future package having an outdated dependency. And our dataset is too big to use boot.

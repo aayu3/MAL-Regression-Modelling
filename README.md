@@ -1,2 +1,5 @@
 # MAL-Regression-Modelling
 Regression Model for MyAnimeList data for Stat 420 final project
+
+## Description (Copied from Executive Report)
+MyAnimeList (MAL) is the largest public database of Japanese animations. The data we used was gathered directly from the website using a crawler and compiled by Matěj Račinský. The dataset contains information on 302,675 unique users, and 14,478 unique shows. The particular data we are interested in is the show data, under AnimeList.csv, which contains 14,478 shows, and 30 columns, including ratings, genre, and other information. In particular our goal is to predict the score, which is on a scale of 1-10 from information about the show to gauge how well received the show would be. After cleaning the data we ended up using a linear regression model with a power transformation that predicts the score from a total of 34 predictors, consisting of the number of episodes, the number of people who scored the show, the type of animation, the reference source, the rating, and which of the five most popular genres that the show fit into (Comedy, Action, Fantasy, Adventure, and Drama).
